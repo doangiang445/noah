@@ -1,0 +1,186 @@
+/**
+ * Quét video trong một thư mục Google Drive,
+ * lấy link và cập nhật vào cột 'Link Shopee Video' (Cột B) trong Sheet 'WORKFLOW'
+ * dựa trên tên file video khớp với giá trị cột STT (Cột A).
+ * Script này có khả năng "tiếp tục" nếu bị dừng do giới hạn thời gian.
+ */
+
+// --- CONFIGURATION (ĐÃ CẬP NHẬT THEO YÊU CẦU CỦA BẠN) ---
+const SHEET_NAME_CONFIG = "WORKFLOW";
+const DRIVE_FOLDER_ID_CONFIG = "1MyKHIpZyRjF90hOubpJ3nHab_QRujI9S"; // ID thư mục Drive của bạn
+const STT_COLUMN_INDEX_CONFIG = 1; // Cột A
+const TARGET_COLUMN_INDEX_CONFIG = 2; // Cột B
+const VIDEO_FILE_EXTENSION_CONFIG = ".mp4";
+const START_ROW_CONFIG = 2;
+const OVERWRITE_EXISTING_LINKS_CONFIG = false; // QUAN TRỌNG: Để false để script có thể tiếp tục
+const PROCESSED_IDS_KEY = 'PROCESSED_VIDEO_FILE_IDS'; // Key để lưu trữ ID file đã xử lý
+
+/**
+ * Hàm chính để cập nhật link video từ Drive vào Sheet, có khả năng tiếp tục.
+ */
+function updateLinksFromDriveToSheet_Resumable() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME_CONFIG);
+
+  if (!sheet) {
+    ui.alert(`Lỗi: Không tìm thấy Sheet "${SHEET_NAME_CONFIG}".`);
+    Logger.log(`Lỗi: Không tìm thấy Sheet "${SHEET_NAME_CONFIG}".`);
+    return;
+  }
+
+  let folder;
+  if (!DRIVE_FOLDER_ID_CONFIG || DRIVE_FOLDER_ID_CONFIG === "YOUR_DRIVE_FOLDER_ID_HERE") {
+     ui.alert(`Lỗi: Vui lòng nhập Folder ID của Google Drive vào trong code (biến DRIVE_FOLDER_ID_CONFIG).`);
+     Logger.log(`Lỗi: DRIVE_FOLDER_ID_CONFIG chưa được cấu hình.`);
+     return;
+  }
+  try {
+    folder = DriveApp.getFolderById(DRIVE_FOLDER_ID_CONFIG);
+    Logger.log(`Đang truy cập thư mục Drive: "${folder.getName()}" (ID: ${DRIVE_FOLDER_ID_CONFIG})`);
+  } catch (e) {
+    ui.alert(`Lỗi: Không truy cập được thư mục Drive với ID "${DRIVE_FOLDER_ID_CONFIG}". Kiểm tra lại ID và quyền truy cập.\nChi tiết lỗi: ${e}`);
+    Logger.log(`Lỗi truy cập thư mục Drive ID ${DRIVE_FOLDER_ID_CONFIG}: ${e}`);
+    return;
+  }
+
+  // Đọc STT từ Sheet và tạo map
+  const lastRow = sheet.getLastRow();
+  if (lastRow < START_ROW_CONFIG) {
+    Logger.log("Sheet không có dữ liệu STT để xử lý.");
+    ui.alert("Sheet không có dữ liệu STT (từ dòng " + START_ROW_CONFIG + ") để xử lý.");
+    return;
+  }
+  const sttRange = sheet.getRange(START_ROW_CONFIG, STT_COLUMN_INDEX_CONFIG, lastRow - START_ROW_CONFIG + 1, 1);
+  const sttValuesFromSheet = sttRange.getValues();
+  const sttToRowMap = new Map();
+  for (let i = 0; i < sttValuesFromSheet.length; i++) {
+    const stt = String(sttValuesFromSheet[i][0] || "").trim();
+    if (stt && !sttToRowMap.has(stt)) {
+      sttToRowMap.set(stt, START_ROW_CONFIG + i);
+    }
+  }
+  Logger.log(`Đã đọc và map ${sttToRowMap.size} giá trị STT từ Sheet "${SHEET_NAME_CONFIG}".`);
+
+  // Lấy danh sách ID file đã xử lý từ UserProperties
+  const userProperties = PropertiesService.getUserProperties();
+  let processedFileIdsString = userProperties.getProperty(PROCESSED_IDS_KEY);
+  let processedFileIds = processedFileIdsString ? new Set(processedFileIdsString.split(',')) : new Set();
+  Logger.log(`Tìm thấy ${processedFileIds.size} file ID đã được xử lý trước đó.`);
+
+  const filesInDrive = folder.getFiles();
+  let filesCheckedThisRun = 0; // Số file Drive được kiểm tra trong lần chạy này
+  let linksUpdatedThisRun = 0;
+  let sttNotFoundThisRun = 0;
+  let skippedAsProcessedThisRun = 0; // Số file bỏ qua vì đã xử lý trước đó
+  const scriptStartTime = new Date();
+  let propertySaveCounter = 0; // Đếm để lưu property định kỳ
+
+  Logger.log("Bắt đầu quét các file trong thư mục Drive...");
+
+  while (filesInDrive.hasNext()) {
+    const file = filesInDrive.next();
+    const fileId = file.getId();
+    const fileName = file.getName();
+    filesCheckedThisRun++;
+
+    if (processedFileIds.has(fileId)) {
+      skippedAsProcessedThisRun++;
+      // Logger.log(`Bỏ qua file ID: ${fileId} (Tên: ${fileName}) - đã xử lý trước đó.`);
+      continue; // Bỏ qua file này
+    }
+
+    if (fileName.toLowerCase().endsWith(VIDEO_FILE_EXTENSION_CONFIG.toLowerCase())) {
+      const sttFromFile = fileName.substring(0, fileName.length - VIDEO_FILE_EXTENSION_CONFIG.length).trim();
+      
+      if (sttToRowMap.has(sttFromFile)) {
+        const targetRow = sttToRowMap.get(sttFromFile);
+        const driveLink = file.getUrl();
+        const existingValueInTargetCol = String(sheet.getRange(targetRow, TARGET_COLUMN_INDEX_CONFIG).getValue() || "").trim();
+
+        if (OVERWRITE_EXISTING_LINKS_CONFIG || !existingValueInTargetCol) {
+          if (driveLink !== existingValueInTargetCol || OVERWRITE_EXISTING_LINKS_CONFIG) {
+            try {
+              sheet.getRange(targetRow, TARGET_COLUMN_INDEX_CONFIG).setValue(driveLink);
+              linksUpdatedThisRun++;
+              Logger.log(`Đã cập nhật link cho STT "${sttFromFile}" (File: "${fileName}") vào dòng ${targetRow}.`);
+            } catch (e) {
+              Logger.log(`Lỗi khi ghi vào Sheet cho STT "${sttFromFile}" (Dòng ${targetRow}): ${e}`);
+            }
+          }
+        } else {
+           // Logger.log(`Bỏ qua STT "${sttFromFile}" (File: "${fileName}") do cột đích đã có link và không ghi đè.`);
+        }
+      } else {
+        Logger.log(`STT "${sttFromFile}" (Từ file: "${fileName}") không tìm thấy trong cột STT của Sheet "${SHEET_NAME_CONFIG}".`);
+        sttNotFoundThisRun++;
+      }
+    }
+    
+    // Đánh dấu file này đã được xử lý (dù thành công hay không)
+    processedFileIds.add(fileId);
+    propertySaveCounter++;
+
+    // Lưu trạng thái định kỳ và kiểm tra thời gian
+    if (filesCheckedThisRun % 20 === 0) { // Kiểm tra sau mỗi 20 file
+       SpreadsheetApp.flush();
+       if (propertySaveCounter > 0) { // Chỉ lưu nếu có thay đổi
+           userProperties.setProperty(PROCESSED_IDS_KEY, Array.from(processedFileIds).join(','));
+           // Logger.log(`Đã lưu ${processedFileIds.size} ID file đã xử lý vào Properties.`); // Giảm log
+           propertySaveCounter = 0; // Reset counter
+       }
+       const elapsedTime = (new Date() - scriptStartTime) / 1000;
+       if (elapsedTime > 330) { // Dừng sau 5.5 phút (330 giây)
+            Logger.log(`Script tạm dừng sau khi kiểm tra ${filesCheckedThisRun} files trong lần chạy này (Tổng ID đã xử lý: ${processedFileIds.size}). Thời gian: ${elapsedTime.toFixed(1)}s.`);
+            ui.alert(`Script tạm dừng do sắp hết thời gian thực thi.\n\nĐã kiểm tra ${filesCheckedThisRun} files trong lần chạy này.\nTổng số ID video đã xử lý (tính cả các lần chạy trước): ${processedFileIds.size}.\n\nVui lòng CHẠY LẠI script để tiếp tục.`);
+            return;
+       }
+    }
+  } // Kết thúc vòng lặp qua file
+
+  // Lưu trạng thái lần cuối
+  if (propertySaveCounter > 0) {
+      userProperties.setProperty(PROCESSED_IDS_KEY, Array.from(processedFileIds).join(','));
+      Logger.log(`Đã lưu ${processedFileIds.size} ID file đã xử lý vào Properties (cuối script).`);
+  }
+  SpreadsheetApp.flush();
+  const scriptEndTime = new Date();
+  const totalTime = (scriptEndTime - scriptStartTime) / 1000;
+
+  const summary = `Hoàn thành lần chạy này!\n` +
+                `--------------------\n` +
+                `Sheet cập nhật: "${SHEET_NAME_CONFIG}"\n` +
+                `Thư mục Drive ID: "${DRIVE_FOLDER_ID_CONFIG}"\n` +
+                `--------------------\n` +
+                `Số file Drive được kiểm tra trong lần chạy này: ${filesCheckedThisRun}\n` +
+                `Số file bỏ qua (đã xử lý ở lần chạy trước): ${skippedAsProcessedThisRun}\n` +
+                `Số link đã cập nhật vào Sheet trong lần chạy này: ${linksUpdatedThisRun}\n` +
+                `Số STT từ video không tìm thấy trong Sheet (lần này): ${sttNotFoundThisRun}\n` +
+                `Tổng số ID video đã được xử lý (tính cả các lần chạy trước): ${processedFileIds.size}\n` +
+                `Thời gian thực thi lần này: ${totalTime.toFixed(1)} giây\n` +
+                `--------------------\n` +
+                `LƯU Ý: Nếu tổng số ID đã xử lý < tổng số video của bạn, hãy CHẠY LẠI script để tiếp tục.`;
+  Logger.log(summary);
+  ui.alert('Hoàn thành lần chạy!', summary, ui.ButtonSet.OK);
+}
+
+/**
+ * Hàm tiện ích để xóa danh sách ID các file video đã xử lý.
+ * Chạy hàm này nếu bạn muốn script quét lại toàn bộ từ đầu.
+ */
+function clearProcessedVideoIds() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.alert(
+    'Xác nhận xóa?',
+    'Bạn có chắc chắn muốn xóa lịch sử các video đã được xử lý không? Script sẽ quét lại toàn bộ thư mục Drive từ đầu.',
+    ui.ButtonSet.YES_NO);
+
+  if (response == ui.Button.YES) {
+    PropertiesService.getUserProperties().deleteProperty(PROCESSED_IDS_KEY);
+    Logger.log(`Đã xóa danh sách ID file đã xử lý (key: ${PROCESSED_IDS_KEY}).`);
+    ui.alert('Đã xóa lịch sử xử lý. Lần chạy tiếp theo của "updateLinksFromDriveToSheet_Resumable" sẽ quét lại từ đầu.');
+  } else {
+    Logger.log('Hủy thao tác xóa lịch sử xử lý.');
+    ui.alert('Thao tác xóa đã được hủy.');
+  }
+}
