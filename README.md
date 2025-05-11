@@ -1,6 +1,7 @@
 File mẫu Google Sheet: https://docs.google.com/spreadsheets/d/1yiI3ESBBseaVRODSVeNfix_VGyLbng6iUfU7OsM_58M/edit?usp=sharing
 
 File mẫu Google Drive: https://drive.google.com/drive/folders/1pRZ0vRKVPp5CJfKe66-ZOzxve1Sw-yJp?dmr=1&ec=wgc-drive-hero-goto
+=> ID Folder: 1pRZ0vRKVPp5CJfKe66-ZOzxve1Sw-yJp (Sau "folders/ và trước kỹ tự "?")
 
 Để giải quyết vấn đề này và cho phép script "tiếp tục" từ nơi nó dừng lại khi bạn chạy lại, chúng ta cần một cơ chế để "ghi nhớ" những file video nào trong Drive đã được xử lý.
 
