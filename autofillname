@@ -1,0 +1,9 @@
+$folder = "D:\Path\To\AllVideos"
+$files = Get-ChildItem -Path $folder -Filter *.mp4 | Sort-Object Name
+$count = 1
+
+foreach ($file in $files) {
+    $newName = "$count.mp4"
+    Rename-Item -Path $file.FullName -NewName $newName
+    $count++
+}
