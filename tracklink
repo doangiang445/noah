@@ -1,0 +1,12 @@
+$source = "D:\Path\To\MainFolder"
+$destination = "D:\Path\To\MainFolder\AllVideos"
+
+# Tạo thư mục đích nếu chưa có
+if (!(Test-Path -Path $destination)) {
+    New-Item -ItemType Directory -Path $destination
+}
+
+# Di chuyển tất cả video từ các folder con vào thư mục đích
+Get-ChildItem -Path $source -Recurse -Include *.mp4, *.mov, *.avi, *.mkv | ForEach-Object {
+    Move-Item -Path $_.FullName -Destination $destination -Force
+}
